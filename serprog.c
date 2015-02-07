@@ -962,3 +962,8 @@ static int serprog_spi_read(struct flashctx *flash, uint8_t *buf,
 	}
 	return 0;
 }
+
+void *serprog_map(const char *descr, uintptr_t phys_addr, size_t len)
+{
+	return (void*)phys_addr;
+}
