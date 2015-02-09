@@ -366,6 +366,19 @@ const struct programmer_entry programmer_table[] = {
 	},
 #endif
 
+#if CONFIG_PICKIT2_SPI == 1
+	{
+		.name			= "pickit2_spi",
+		.type			= OTHER,
+					/* FIXME */
+		.devs.note		= "Microchip PICkit2\n",
+		.init			= pickit2_spi_init,
+		.map_flash_region	= fallback_map,
+		.unmap_flash_region	= fallback_unmap,
+		.delay			= internal_delay,
+	},
+#endif
+
 	{0}, /* This entry corresponds to PROGRAMMER_INVALID. */
 };
 
@@ -2026,7 +2039,7 @@ int doit(struct flashctx *flash, int force, const char *filename, int read_it,
 	// ////////////////////////////////////////////////////////////
 
 	if (write_it && erase_and_write_flash(flash, oldcontents, newcontents)) {
-		msg_cerr("Uh oh. Erase/write failed.");
+		msg_cerr("Uh oh. Erase/write failed. ");
 		if (read_all_first) {
 			msg_cerr("Checking if anything has changed.\n");
 			msg_cinfo("Reading current flash chip contents... ");

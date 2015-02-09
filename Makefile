@@ -138,7 +138,7 @@ UNSUPPORTED_FEATURES += CONFIG_PONY_SPI=yes
 else
 override CONFIG_PONY_SPI = no
 endif
-# Dediprog and FT2232 are not supported under DOS (missing USB support).
+# Dediprog, USB-Blaster, PICkit2 and FT2232 are not supported under DOS (missing USB support).
 ifeq ($(CONFIG_DEDIPROG), yes)
 UNSUPPORTED_FEATURES += CONFIG_DEDIPROG=yes
 else
@@ -153,6 +153,11 @@ ifeq ($(CONFIG_USBBLASTER_SPI), yes)
 UNSUPPORTED_FEATURES += CONFIG_USBBLASTER_SPI=yes
 else
 override CONFIG_USBBLASTER_SPI = no
+endif
+ifeq ($(CONFIG_PICKIT2_SPI), yes)
+UNSUPPORTED_FEATURES += CONFIG_PICKIT2_SPI=yes
+else
+override CONFIG_PICKIT2_SPI = no
 endif
 endif
 
@@ -277,7 +282,7 @@ UNSUPPORTED_FEATURES += CONFIG_PONY_SPI=yes
 else
 override CONFIG_PONY_SPI = no
 endif
-# Dediprog and FT2232 are not supported with libpayload (missing libusb support)
+# Dediprog, USB-Blaster, PICkit2 and FT2232 are not supported with libpayload (missing libusb support)
 ifeq ($(CONFIG_DEDIPROG), yes)
 UNSUPPORTED_FEATURES += CONFIG_DEDIPROG=yes
 else
@@ -292,6 +297,11 @@ ifeq ($(CONFIG_USBBLASTER_SPI), yes)
 UNSUPPORTED_FEATURES += CONFIG_USBBLASTER_SPI=yes
 else
 override CONFIG_USBBLASTER_SPI = no
+endif
+ifeq ($(CONFIG_PICKIT2_SPI), yes)
+UNSUPPORTED_FEATURES += CONFIG_PICKIT2_SPI=yes
+else
+override CONFIG_PICKIT2_SPI = no
 endif
 endif
 
@@ -428,6 +438,9 @@ CONFIG_USBBLASTER_SPI ?= yes
 
 # MSTAR DDC support needs more tests/reviews/cleanups.
 CONFIG_MSTARDDC_SPI ?= no
+
+# Always enable PICkit2 SPI dongles for now.
+CONFIG_PICKIT2_SPI ?= yes
 
 # Always enable dummy tracing for now.
 CONFIG_DUMMY ?= yes
@@ -614,6 +627,12 @@ NEED_FTDI := yes
 PROGRAMMER_OBJS += usbblaster_spi.o
 endif
 
+ifeq ($(CONFIG_PICKIT2_SPI), yes)
+FEATURE_CFLAGS += -D'CONFIG_PICKIT2_SPI=1'
+PROGRAMMER_OBJS += pickit2_spi.o
+NEED_USB := yes
+endif
+
 ifeq ($(NEED_FTDI), yes)
 FTDILIBS := $(shell ([ -n "$(PKG_CONFIG_LIBDIR)" ] && export PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)" ); pkg-config --libs libftdi || printf "%s" "-lftdi -lusb")
 FEATURE_CFLAGS += $(shell LC_ALL=C grep -q "FT232H := yes" .features && printf "%s" "-D'HAVE_FT232H=1'")
@@ -713,6 +732,8 @@ endif
 ifeq ($(NEED_PCI), yes)
 CHECK_LIBPCI = yes
 FEATURE_CFLAGS += -D'NEED_PCI=1'
+FEATURE_CFLAGS += $(shell LC_ALL=C grep -q "OLD_PCI_GET_DEV := yes" .libdeps && printf "%s" "-D'OLD_PCI_GET_DEV=1'")
+
 PROGRAMMER_OBJS += pcidev.o physmap.o hwaccess.o
 ifeq ($(TARGET_OS), NetBSD)
 # The libpci we want is called libpciutils on NetBSD and needs NetBSD libpci.
@@ -842,6 +863,27 @@ int main(int argc, char **argv)
 endef
 export LIBPCI_TEST
 
+define PCI_GET_DEV_TEST
+/* Avoid a failing test due to libpci header symbol shadowing breakage */
+#define index shadow_workaround_index
+#if !defined __NetBSD__
+#include <pci/pci.h>
+#else
+#include <pciutils/pci.h>
+#endif
+struct pci_access *pacc;
+struct pci_dev *dev = {0};
+int main(int argc, char **argv)
+{
+	(void) argc;
+	(void) argv;
+	pacc = pci_alloc();
+	dev = pci_get_dev(pacc, dev->domain, dev->bus, dev->dev, 1);
+	return 0;
+}
+endef
+export PCI_GET_DEV_TEST
+
 define LIBUSB0_TEST
 #include "platform.h"
 #if IS_WINDOWS
@@ -869,6 +911,11 @@ ifeq ($(CHECK_LIBPCI), yes)
 		echo "Please install libpci headers (package pciutils-devel).";	\
 		echo "See README for more information."; echo;			\
 		rm -f .test.c .test.o; exit 1)
+	@printf "Checking version of pci_get_dev... "
+	@echo "$$PCI_GET_DEV_TEST" > .test.c
+	@$(CC) -c $(CPPFLAGS) $(CFLAGS) .test.c -o .test.o >/dev/null 2>&1 &&	\
+		( echo "new version (including PCI domain parameter)."; echo "OLD_PCI_GET_DEV := no" >> .libdeps ) ||	\
+		( echo "old version (without PCI domain parameter)."; echo "OLD_PCI_GET_DEV := yes" >> .libdeps )
 	@printf "Checking if libpci is present and sufficient... "
 	@$(CC) $(LDFLAGS) .test.o -o .test$(EXEC_SUFFIX) $(LIBS) $(PCILIBS) >/dev/null &&		\
 		echo "yes." || ( echo "no.";							\
@@ -914,6 +961,7 @@ ifneq ($(UNSUPPORTED_FEATURES), )
 endif
 
 define FTDI_TEST
+#include <stdlib.h>
 #include <ftdi.h>
 struct ftdi_context *ftdic = NULL;
 int main(int argc, char **argv)
