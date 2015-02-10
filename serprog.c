@@ -1121,5 +1121,12 @@ static int serprog_spi_read(struct flashctx *flash, uint8_t *buf,
 
 void *serprog_map(const char *descr, uintptr_t phys_addr, size_t len)
 {
-	return (void*)phys_addr;
+	if ((phys_addr & 0xFF000000) == 0xFF000000) {
+		/* This is normal, no need to report anything. */
+		return (void*)phys_addr;
+	} else {
+		msg_pwarn(MSGHEADER "incompatible mapping '%s' phys_addr 0x%08X len %d, returning NULL\n",
+			descr,(unsigned int)phys_addr,len);
+		return NULL;
+	}
 }
