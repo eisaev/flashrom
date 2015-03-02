@@ -1125,8 +1125,8 @@ void *serprog_map(const char *descr, uintptr_t phys_addr, size_t len)
 		/* This is normal, no need to report anything. */
 		return (void*)phys_addr;
 	} else {
-		msg_pwarn(MSGHEADER "incompatible mapping '%s' phys_addr 0x%08X len %d, returning NULL\n",
-			descr,(unsigned int)phys_addr,len);
+		msg_pwarn(MSGHEADER "incompatible mapping %s, 0x%zx bytes at 0x%0*" PRIxPTR ", returning NULL\n",
+			descr, len, PRIxPTR_WIDTH, phys_addr);
 		return NULL;
 	}
 }
