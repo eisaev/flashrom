@@ -386,7 +386,7 @@ CLI_OBJS = cli_classic.o cli_output.o cli_common.o print.o
 # will not require subversion. The downloadable snapshots are already exported.
 SVNVERSION := $(shell ./util/getrevision.sh -u 2>/dev/null )
 
-RELEASE := 0.9.8-rc1
+RELEASE := 0.9.8
 VERSION := $(RELEASE)-$(SVNVERSION)
 RELEASENAME ?= $(VERSION)
 
@@ -1081,6 +1081,6 @@ djgpp-dos: clean
 libpayload: clean
 	make CC="CC=i386-elf-gcc lpgcc" AR=i386-elf-ar RANLIB=i386-elf-ranlib
 
-.PHONY: all install clean distclean compiler hwlibs features export tarball dos featuresavailable
+.PHONY: all install clean distclean compiler hwlibs features export tarball djgpp-dos featuresavailable libpayload
 
 -include $(OBJS:.o=.d)
