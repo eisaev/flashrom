@@ -7353,7 +7353,7 @@ const struct flashchip flashchips[] = {
 			}
 		},
 		.printlock	= spi_prettyprint_status_register_bp3_srwd, /* bit6 is quad enable */
-		.unlock		= spi_disable_blockprotect_bp3_srwd,
+		.unlock		= spi_disable_blockprotect_wpsel_or_bp3_srwd,
 		.write		= spi_chip_write_256,
 		.read		= spi_chip_read, /* Fast read (0x0B) and multi I/O supported */
 		.voltage	= {2700, 3600},

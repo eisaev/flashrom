@@ -62,6 +62,7 @@ int spi_read_chunked(struct flashctx *flash, uint8_t *buf, unsigned int start, u
 int spi_write_chunked(struct flashctx *flash, const uint8_t *buf, unsigned int start, unsigned int len, unsigned int chunksize);
 
 /* spi25_statusreg.c */
+uint8_t spi_read_security_register(struct flashctx *flash);
 uint8_t spi_read_status_register(struct flashctx *flash);
 int spi_write_status_register(struct flashctx *flash, int status);
 void spi_prettyprint_status_register_bit(uint8_t status, int bit);
@@ -77,6 +78,7 @@ int spi_disable_blockprotect_bp1_srwd(struct flashctx *flash);
 int spi_disable_blockprotect_bp2_srwd(struct flashctx *flash);
 int spi_disable_blockprotect_bp3_srwd(struct flashctx *flash);
 int spi_disable_blockprotect_bp4_srwd(struct flashctx *flash);
+int spi_disable_blockprotect_wpsel_or_bp3_srwd(struct flashctx *flash);
 int spi_prettyprint_status_register_amic_a25l032(struct flashctx *flash);
 int spi_prettyprint_status_register_at25df(struct flashctx *flash);
 int spi_prettyprint_status_register_at25df_sec(struct flashctx *flash);

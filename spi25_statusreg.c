@@ -91,6 +91,7 @@ static int spi_write_status_register_flag(struct flashctx *flash, int status, co
 	return 0;
 }
 
+
 int spi_write_status_register(struct flashctx *flash, int status)
 {
 	int feature_bits = flash->chip->feature_bits;
@@ -106,6 +107,19 @@ int spi_write_status_register(struct flashctx *flash, int status)
 	if (ret && (feature_bits & FEATURE_WRSR_EWSR))
 		ret = spi_write_status_register_flag(flash, status, JEDEC_EWSR);
 	return ret;
+}
+
+uint8_t spi_read_security_register(struct flashctx *flash)
+{
+	static const unsigned char cmd[1] = { 0x2B };
+	unsigned char readarr[1];
+	int ret;
+	/* Read Security Register */
+	ret = spi_send_command(flash, sizeof(cmd), sizeof(readarr), cmd, readarr);
+	if (ret)
+		msg_cerr("RDSCUR failed!\n");
+
+	return readarr[0];
 }
 
 uint8_t spi_read_status_register(struct flashctx *flash)
@@ -223,6 +237,23 @@ int spi_disable_blockprotect_bp3_srwd(struct flashctx *flash)
 int spi_disable_blockprotect_bp4_srwd(struct flashctx *flash)
 {
 	return spi_disable_blockprotect_generic(flash, 0x7C, 1 << 7, 0, 0xFF);
+}
+
+int spi_disable_blockprotect_wpsel_or_bp3_srwd(struct flashctx *flash)
+{
+	unsigned char secur = spi_read_security_register(flash);
+	msg_cdbg("Chip security register is 0x%02X\n", secur);
+	if (secur & 0x80) {
+		static const unsigned char cmd[1] = { 0x98 };
+		msg_cdbg("Individual block protect (WPSEL) mode detected, unlocking\n");
+		int ret;
+		/* Gang Block unlock */
+		ret = spi_send_command(flash, sizeof(cmd), 0, cmd, NULL);
+		if (ret)
+			msg_cerr("GBULK failed!\n");
+	}
+	/* Anyways check the normal BP too. TODO: should we if WPSEL? */
+	return spi_disable_blockprotect_generic(flash, 0x3C, 1 << 7, 0, 0xFF);
 }
 
 static void spi_prettyprint_status_register_hex(uint8_t status)
