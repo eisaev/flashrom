@@ -247,10 +247,17 @@ int spi_disable_blockprotect_wpsel_or_bp3_srwd(struct flashctx *flash)
 		static const unsigned char cmd[1] = { 0x98 };
 		msg_cdbg("Individual block protect (WPSEL) mode detected, unlocking\n");
 		int ret;
+		ret = spi_write_enable(flash);
+		if (ret) {
+			msg_cerr("WREN failed!\n");
+			return ret;
+		}
 		/* Gang Block unlock */
 		ret = spi_send_command(flash, sizeof(cmd), 0, cmd, NULL);
-		if (ret)
+		if (ret) {
 			msg_cerr("GBULK failed!\n");
+			return ret;
+		}
 	}
 	/* Anyways check the normal BP too. TODO: should we if WPSEL? */
 	return spi_disable_blockprotect_generic(flash, 0x3C, 1 << 7, 0, 0xFF);
