@@ -138,7 +138,7 @@ UNSUPPORTED_FEATURES += CONFIG_PONY_SPI=yes
 else
 override CONFIG_PONY_SPI = no
 endif
-# Dediprog, USB-Blaster, PICkit2 and FT2232 are not supported under DOS (missing USB support).
+# Dediprog, USB-Blaster, PICkit2, CH341A and FT2232 are not supported under DOS (missing USB support).
 ifeq ($(CONFIG_DEDIPROG), yes)
 UNSUPPORTED_FEATURES += CONFIG_DEDIPROG=yes
 else
@@ -158,6 +158,11 @@ ifeq ($(CONFIG_PICKIT2_SPI), yes)
 UNSUPPORTED_FEATURES += CONFIG_PICKIT2_SPI=yes
 else
 override CONFIG_PICKIT2_SPI = no
+endif
+ifeq ($(CONFIG_CH341A_SPI), yes)
+UNSUPPORTED_FEATURES += CONFIG_CH341A_SPI=yes
+else
+override CONFIG_CH341A_SPI = no
 endif
 endif
 
@@ -282,7 +287,7 @@ UNSUPPORTED_FEATURES += CONFIG_PONY_SPI=yes
 else
 override CONFIG_PONY_SPI = no
 endif
-# Dediprog, USB-Blaster, PICkit2 and FT2232 are not supported with libpayload (missing libusb support)
+# Dediprog, USB-Blaster, PICkit2, CH341A and FT2232 are not supported with libpayload (missing libusb support)
 ifeq ($(CONFIG_DEDIPROG), yes)
 UNSUPPORTED_FEATURES += CONFIG_DEDIPROG=yes
 else
@@ -302,6 +307,11 @@ ifeq ($(CONFIG_PICKIT2_SPI), yes)
 UNSUPPORTED_FEATURES += CONFIG_PICKIT2_SPI=yes
 else
 override CONFIG_PICKIT2_SPI = no
+endif
+ifeq ($(CONFIG_CH341A_SPI), yes)
+UNSUPPORTED_FEATURES += CONFIG_CH341A_SPI=yes
+else
+override CONFIG_CH341A_SPI = no
 endif
 endif
 
@@ -481,6 +491,9 @@ CONFIG_LINUX_SPI ?= yes
 # Always enable ITE IT8212F PATA controllers for now.
 CONFIG_IT8212 ?= yes
 
+# Winchiphead CH341A
+CONFIG_CH341A_SPI ?= yes
+
 # Disable wiki printing by default. It is only useful if you have wiki access.
 CONFIG_PRINT_WIKI ?= no
 
@@ -634,7 +647,7 @@ NEED_USB := yes
 endif
 
 ifeq ($(NEED_FTDI), yes)
-FTDILIBS := $(shell ([ -n "$(PKG_CONFIG_LIBDIR)" ] && export PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)" ); pkg-config --libs libftdi1 || pkg-config --libs libftdi || printf "%s" "-lftdi -lusb")
+FTDILIBS := $(shell [ -n "$(PKG_CONFIG_LIBDIR)" ] && export PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)" ; pkg-config --libs libftdi1 || pkg-config --libs libftdi || printf "%s" "-lftdi -lusb")
 FEATURE_CFLAGS += $(shell LC_ALL=C grep -q "FT232H := yes" .features && printf "%s" "-D'HAVE_FT232H=1'")
 FTDI_INCLUDES := $(shell ([ -n "$(PKG_CONFIG_LIBDIR)" ] && export PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)" ); pkg-config --cflags-only-I libftdi1)
 FEATURE_CFLAGS += $(FTDI_INCLUDES)
@@ -721,6 +734,12 @@ NEED_LINUX_I2C := yes
 PROGRAMMER_OBJS += mstarddc_spi.o
 endif
 
+ifeq ($(CONFIG_CH341A_SPI), yes)
+FEATURE_CFLAGS += -D'CONFIG_CH341A_SPI=1'
+PROGRAMMER_OBJS += ch341a_spi.o
+NEED_LIBUSB1 := yes
+endif
+
 ifeq ($(NEED_SERIAL), yes)
 LIB_OBJS += serial.o
 endif
@@ -761,7 +780,14 @@ endif
 ifeq ($(NEED_USB), yes)
 CHECK_LIBUSB0 = yes
 FEATURE_CFLAGS += -D'NEED_USB=1'
-USBLIBS := $(shell ([ -n "$(PKG_CONFIG_LIBDIR)" ] && export PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)" ); pkg-config --libs libusb || printf "%s" "-lusb")
+USBLIBS := $(shell [ -n "$(PKG_CONFIG_LIBDIR)" ] && export PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)"; pkg-config --libs libusb || printf "%s" "-lusb")
+endif
+
+ifeq ($(NEED_LIBUSB1), yes)
+CHECK_LIBUSB1 = yes
+FEATURE_CFLAGS += -D'NEED_LIBUSB1=1'
+USBLIBS += $(shell [ -n "$(PKG_CONFIG_LIBDIR)" ] && export PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)"; pkg-config --libs libusb-1.0  || printf "%s" "-lusb-1.0")
+CPPFLAGS += $(shell [ -n "$(PKG_CONFIG_LIBDIR)" ] && export PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)"; pkg-config --cflags-only-I libusb-1.0  || printf "%s" "-I/usr/include/libusb-1.0")
 endif
 
 ifeq ($(CONFIG_PRINT_WIKI), yes)
@@ -903,6 +929,19 @@ int main(int argc, char **argv)
 endef
 export LIBUSB0_TEST
 
+
+define LIBUSB1_TEST
+#include <libusb.h>
+int main(int argc, char **argv)
+{
+	(void)argc;
+	(void)argv;
+	libusb_init(NULL);
+	return 0;
+}
+endef
+export LIBUSB1_TEST
+
 hwlibs: compiler
 	@printf "" > .libdeps
 ifeq ($(CHECK_LIBPCI), yes)
@@ -941,6 +980,22 @@ ifeq ($(CHECK_LIBUSB0), yes)
 	@$(CC) $(LDFLAGS) .test.o -o .test$(EXEC_SUFFIX) $(LIBS) $(USBLIBS) >/dev/null &&	\
 		echo "yes." || ( echo "no.";						\
 		echo "Please install libusb-0.1 or libusb-compat.";			\
+		echo "See README for more information."; echo;				\
+		rm -f .test.c .test.o .test$(EXEC_SUFFIX); exit 1)
+	@rm -f .test.c .test.o .test$(EXEC_SUFFIX)
+endif
+ifeq ($(CHECK_LIBUSB1), yes)
+	@printf "Checking for libusb-1.0 headers... "
+	@echo "$$LIBUSB1_TEST" > .test.c
+	@$(CC) -c $(CPPFLAGS) $(CFLAGS) .test.c -o .test.o >/dev/null &&		\
+		echo "found." || ( echo "not found."; echo;				\
+		echo "Please install libusb-1.0 headers.";	\
+		echo "See README for more information."; echo;				\
+		rm -f .test.c .test.o; exit 1)
+	@printf "Checking if libusb-1.0 is usable... "
+	@$(CC) $(LDFLAGS) .test.o -o .test$(EXEC_SUFFIX) $(LIBS) $(USBLIBS) >/dev/null &&	\
+		echo "yes." || ( echo "no.";						\
+		echo "Please install libusb-1.0.";			\
 		echo "See README for more information."; echo;				\
 		rm -f .test.c .test.o .test$(EXEC_SUFFIX); exit 1)
 	@rm -f .test.c .test.o .test$(EXEC_SUFFIX)
