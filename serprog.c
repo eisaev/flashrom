@@ -282,15 +282,15 @@ static int sp_docommand(uint8_t command, uint32_t parmlen,
 	if ((sp_next_token >= 0) && (sp_cmd_has_token[command]))
 		expected_reply = sp_next_token;
 
+	if ((expected_reply & 0x80)&&(c & 0x80)) {
+		uint8_t t = c+1;
+		if (t == 0) t = 0x81;
+		sp_next_token = t;
+	}
 	if (c != expected_reply) {
 		msg_perr("Error: invalid %s 0x%02X (expected 0x%02X) from device (to command 0x%02X)\n",
 			 (c & 0x80) ? "token" : "reply", c, expected_reply, command);
 		return 1;
-	}
-	if (c & 0x80) {
-		c++;
-		if (c == 0) c = 0x81;
-		sp_next_token = c;
 	}
 	if (retlen) {
 		if (serialport_read(retparms, retlen) != 0) {
@@ -355,16 +355,16 @@ static int sp_check_stream_free(int len_to_be_sent)
 					streamop_name[STREAMOP_TYPE(op)]);
 				return 1;
 			}
+			if ((expected_reply & 0x80)&&(c & 0x80)) {
+				uint8_t t = c+1;
+				if (t == 0) t = 0x81;
+				sp_next_token = t;
+			}
 			if (c != expected_reply) {
 				msg_perr("Error: Invalid %s 0x%02X (expected 0x%02X) from "
 					"device as reply to op: %s\n", (c & 0x80) ? "token" : "reply",
 					c,expected_reply,streamop_name[STREAMOP_TYPE(op)]);
 				return 1;
-			}
-			if (c & 0x80) {
-				c++;
-				if (c == 0) c = 0x81;
-				sp_next_token = c;
 			}
 			if (sp_streamed_transmit_bytes <= streamed_bytes_target)
 				break;
