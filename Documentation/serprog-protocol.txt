@@ -1,14 +1,19 @@
-Serial Flasher Protocol Specification - version 1 (0x01 return value == 1)
+Serial Flasher Protocol Specification - version 2 (0x01 return value == 2)
 
 Command And Answer Sequence - all commands give an answer.
 PC: COMMAND(8bit) <parameters determined by opcode>
-DEV: ACK/NAK(8bit) <OPTIONAL RETURN BYTES (only if ACK)> / nothing
+DEV: ACK/TOKEN/NAK(8bit) <OPTIONAL RETURN BYTES (only if ACK/TOKEN)> / nothing
 Command 0x10 (SYNCNOP) has a special return of NAK+ACK for synchronization.
 
 ACK = 0x06
 NAK = 0x15
+TOKEN/TKN = 0x80 + token (0x80 - 0xFF)
 
-All multibyte values are little-endian. Addresses and lengths are 24-bit.
+Tokens are a 7-bit value that is cleared to 0 (represented on wire as 0x80) on boot of device
+and are incremented on/after each token-reply; they roll over to 1 instead of 0.
+See "About Tokens" for more.
+
+All multibyte values are little-endian. Addresses are 32-bit and lengths are 24-bit.
 
 COMMAND	Description			Parameters			Return Value
 0x00	NOP				none				ACK
@@ -19,26 +24,28 @@ COMMAND	Description			Parameters			Return Value
 0x05	Query supported bustypes	none				ACK + 8-bit flags (as per flashrom) / NAK
 0x06	Query connected address lines	none				ACK + 8bit line count / NAK
 0x07	Query operation buffer size	none				ACK + 16bit size / NAK
-0x08	Query maximum write-n length	none				ACK + 24bit length (0==2^24) / NAK
-0x09	Read byte			24-bit addr			ACK + BYTE / NAK
-0x0A	Read n bytes			24-bit addr + 24-bit length	ACK + length bytes / NAK
-0x0B	Initialize operation buffer	none				ACK / NAK
-0x0C	Write to opbuf: Write byte	24-bit addr + 8-bit byte	ACK / NAK (NOTE: takes 5 bytes in opbuf)
-0x0D	Write to opbuf: Write n		24-bit length + 24-bit addr +	ACK / NAK (NOTE: takes 7+n bytes in opbuf)
+0x08	Query maximum write-n length	none				ACK + 24bit length / NAK
+0x09	Read byte			32-bit addr			TKN + BYTE / NAK
+0x0A	Read n bytes			32-bit addr + 24-bit length	TKN + length bytes / NAK
+0x0B	Initialize operation buffer	none				TKN / NAK
+0x0C	Write to opbuf: Write byte	32-bit addr + 8-bit byte	TKN / NAK
+0x0D	Write to opbuf: Write n		24-bit length + 32-bit addr +	TKN / NAK
 					 + length bytes of data
-0x0E	Write to opbuf: delay		32-bit usecs			ACK / NAK (NOTE: takes 5 bytes in opbuf)
-0x0F	Execute operation buffer	none				ACK / NAK
+0x0E	Write to opbuf: delay		32-bit usecs			TKN / NAK
+0x0F	Execute operation buffer	none				TKN / NAK
 0x10	Sync NOP			none				NAK + ACK (for synchronization)
-0x11	Query maximum read-n length	none				ACK + 24-bit length (0==2^24) / NAK
+0x11	Query maximum read-n length	none				ACK + 24-bit length / NAK
 0x12	Set used bustype		8-bit flags (as with 0x05)	ACK / NAK
-0x13	Perform SPI operation		24-bit slen + 24-bit rlen	ACK + rlen bytes of data / NAK
+0x13	Perform SPI operation		24-bit slen + 24-bit rlen	TKN + rlen bytes of data / NAK
 					 + slen bytes of data
 0x14	Set SPI clock frequency in Hz	32-bit requested frequency	ACK + 32-bit set frequency / NAK
 0x15	Toggle flash chip pin drivers	8-bit (0 disable, else enable)	ACK / NAK
-0x17	Write to opbuf: poll		8-bit flags + 24-bit addr	ACK / NAK
-0x18	Write to opbuf: poll w/ delay	as above + 32-bit usecs		ACK / NAK
+0x16	Token NOP			none				ACK + TKN - existence used to indicate token support
+0x17	Write to opbuf: poll		8-bit flags + 32-bit addr	TKN / NAK
+0x18	Write to opbuf: poll w/ delay	as above + 32-bit usecs		TKN / NAK
 0x??	unimplemented command - invalid.
 
+0 is an invalid value for length of read n bytes or write n or return of query maximum write or read n length.
 
 Additional information of the above commands:
 	About unimplemented commands / startup sequence:
@@ -67,7 +74,7 @@ Additional information of the above commands:
 	0x0F (O_EXEC):
 		Execute operation buffer will also clear it, regardless of the return value.
 	0x11 (Q_RDNMAXLEN):
-		If this command is not supported, assume return of 0 (2^24).
+		If this command is not supported, assume return of 2^24 - 1.
 	0x12 (S_BUSTYPE):
 		Set's the used bustype if the programmer can support more than one flash protocol.
 		Sending a byte with more than 1 bit set will make the programmer decide among them
@@ -79,12 +86,12 @@ Additional information of the above commands:
 		This operation is immediate, meaning it doesn't use the operation buffer.
 	0x14 (S_SPI_FREQ):
 		Set the SPI clock frequency. The 32-bit value indicates the
-		requested frequency in Hertz. Value 0 is reserved and should
-		be NAKed by the programmer. The requested frequency should be
-		mapped by the programmer software to a supported frequency
-		lower than the one requested. If there is no lower frequency
-		available the lowest possible should be used. The value
-		chosen is sent back in the reply with an ACK.
+		requested frequency in Hertz. Value 0 is reserved and could
+		be NAKed by the programmer, or handled like value 1 (minimum hz).
+		The requested frequency should be mapped by the programmer software
+		to a supported frequency lower than the one requested. If there is
+		no lower frequency available the lowest possible should be used.
+		The value chosen is sent back in the reply with an ACK.
 	0x15 (S_CMD_S_PIN_STATE):
 		Sets the state of the pin drivers connected to the flash chip. Disabling them allows other
 		devices (e.g. a mainboard's chipset) to access the chip. This way the serprog controller can
@@ -119,6 +126,25 @@ Additional information of the above commands:
 		In addition, support for these commands is recommended:
 		S_CMD_Q_PGMNAME, S_CMD_Q_BUSTYPE, S_CMD_Q_CHIPSIZE (if parallel).
 
+About Tokens
+------------
+Token support is optional - existence of opcode 0x16 Token NOP is used
+to determine support, and is used by flashrom to get the next token that
+would've been used, both for initialization of expected token values and
+maybe for diagnostic purposes like to see if a command was received but
+the reply was lost or it wasnt received at all.
+
+Note: Token NOP does not increment the token, and also returns ACK first.
+
+Without token support every opcode with "TKN" as reply shall have "ACK" instead.
+
+Invalid token values are used to detect lost bytes 
+in the receive channel or a sudden reset of the programming device.
+
+Note: rollower to 1 instead of 0 both allows sure detection of devices being
+accidentally reset _and_ makes the repeat period a prime number (127) which
+should detect better overflown power-of-2 buffers or such errors even if
+lots of data was lost.
 
 Operation buffer details and rationale
 --------------------------------------
@@ -151,10 +177,7 @@ O_EXEC "executes" internal delay count
 2:
 O_INIT is a nop
 O_DELAY executes specified delay
-O_EXEC is a nop
+O_EXEC is a nop and doesnt need to be implemented
 
-Regardless of the implementation style, all 3 opcodes need to be marked as
-supported and return ACK, and reported operation buffer size should be big
-enough to fit atleast 2 delays.
 
 See also serprog.h.
