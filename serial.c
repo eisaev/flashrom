@@ -206,6 +206,9 @@ int serialport_config(fdtype fd, int baud)
 	wanted.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
 	wanted.c_iflag &= ~(IXON | IXOFF | IXANY | ICRNL | IGNCR | INLCR);
 	wanted.c_oflag &= ~OPOST;
+	wanted.c_cc[VMIN] = 0;
+	wanted.c_cc[VTIME] = 10;
+
 	if (tcsetattr(fd, TCSANOW, &wanted) != 0) {
 		msg_perr_strerror("Could not change serial port configuration: ");
 		return 1;
@@ -414,6 +417,7 @@ int serialport_read(unsigned char *buf, unsigned int readcnt)
 #else
 	ssize_t tmp = 0;
 #endif
+	int empty_reads = 0;
 
 	while (readcnt > 0) {
 #if IS_WINDOWS
@@ -421,12 +425,23 @@ int serialport_read(unsigned char *buf, unsigned int readcnt)
 #else
 		tmp = read(sp_fd, buf, readcnt);
 #endif
+
+		if ((tmp == -1)&&(errno == EAGAIN)) tmp = 0;
+
 		if (tmp == -1) {
 			msg_perr("Serial port read error!\n");
 			return 1;
 		}
-		if (!tmp)
+		if (!tmp) {
 			msg_pdbg2("Empty read\n");
+			empty_reads++;
+			if (empty_reads >= 10) {
+				msg_perr("Serial port read timeout!\n");
+				return 1;
+			}
+		} else {
+			empty_reads = 0;
+		}
 		readcnt -= tmp;
 		buf += tmp;
 	}
