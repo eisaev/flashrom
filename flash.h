@@ -346,6 +346,13 @@ __attribute__((format(printf, 2, 3)));
 #define msg_pspew(...)	print(MSG_SPEW, __VA_ARGS__)	/* programmer debug spew  */
 #define msg_cspew(...)	print(MSG_SPEW, __VA_ARGS__)	/* chip debug spew  */
 
+
+void print_hex(enum msglevel level, void *d, size_t len);
+#define print_hex_dbg(d,l) print_hex(MSG_DEBUG, d, l)
+#define print_hex_dbg2(d,l) print_hex(MSG_DEBUG2, d, l)
+#define print_hex_spew(d,l) print_hex(MSG_SPEW, d, l)
+
+
 /* layout.c */
 int register_include_arg(char *name);
 int process_include_args(void);

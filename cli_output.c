@@ -100,3 +100,14 @@ int print(enum msglevel level, const char *fmt, ...)
 #endif /* !STANDALONE */
 	return ret;
 }
+
+void print_hex(enum msglevel level, void *d, size_t len)
+{
+	size_t i;
+	const uint8_t *buf = d;
+	for (i = 0; i < len; i++) {
+		if ((i % 16) == 0)
+			print(level, "\n");
+		print(level, "%02x ", buf[i]);
+	}
+}
