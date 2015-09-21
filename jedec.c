@@ -360,11 +360,15 @@ static int write_byte_program_jedec_common(const struct flashctx *flash, const u
 	chipaddr bios = flash->virtual_memory;
 
 	/* Issue JEDEC Byte Program command */
+	programmer_hint(PGMH_BW_CA_CD);
 	start_program_jedec_common(flash, mask);
 
 	/* transfer data from source to destination */
+	programmer_hint(PGMH_BW_VA_VD);
 	chip_writeb(flash, *src, dst);
+	programmer_hint(PGMH_BW_CA_CD);
 	toggle_ready_jedec(flash, bios);
+	programmer_hint(PGMH_BW_LOOP_END);
 
 	return 0;
 }

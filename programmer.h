@@ -142,6 +142,7 @@ struct programmer_entry {
 	void (*unmap_flash_region) (void *virt_addr, size_t len);
 
 	void (*delay) (unsigned int usecs);
+	void (*hint) (enum pgm_hint h);
 };
 
 extern const struct programmer_entry programmer_table[];

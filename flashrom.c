@@ -589,6 +589,12 @@ void programmer_delay(unsigned int usecs)
 		programmer_table[programmer].delay(usecs);
 }
 
+void programmer_hint(enum pgm_hint h)
+{
+	if (programmer_table[programmer].hint)
+		programmer_table[programmer].hint(h);
+}
+
 int read_memmapped(struct flashctx *flash, uint8_t *buf, unsigned int start,
 		   int unsigned len)
 {

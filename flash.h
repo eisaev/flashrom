@@ -61,6 +61,16 @@ void *programmer_map_flash_region(const char *descr, uintptr_t phys_addr, size_t
 void programmer_unmap_flash_region(void *virt_addr, size_t len);
 void programmer_delay(unsigned int usecs);
 
+enum pgm_hint {
+	PGMH_BW_CA_CD,
+	PGMH_BW_CA_VD,
+	PGMH_BW_VA_CD,
+	PGMH_BW_VA_VD,
+	PGMH_BW_LOOP_END
+};
+
+void programmer_hint(enum pgm_hint h);
+
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))
 
 enum chipbustype {
