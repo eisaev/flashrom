@@ -228,6 +228,7 @@ const struct programmer_entry programmer_table[] = {
 		.map_flash_region	= serprog_map,
 		.unmap_flash_region	= fallback_unmap,
 		.delay			= serprog_delay,
+		.hint			= serprog_hint,
 	},
 #endif
 

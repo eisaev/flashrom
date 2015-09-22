@@ -65,8 +65,8 @@ static int sp_prev_was_write = 0;
 /* sp_write_n_addr used as the starting addr of the currently
 	combined write-n operation */
 static uint32_t sp_write_n_addr;
-/* The maximum length of an write_n operation; 0 = write-n not supported */
-static uint32_t sp_max_write_n = 0;
+/* The maximum length of an write_n operation */
+static uint32_t sp_max_write_n = 256;
 /* The maximum length of a read_n operation */
 static uint32_t sp_max_read_n = 0;
 
@@ -77,6 +77,7 @@ static int sp_next_token = -1;
 	and a counter that tells how much data is there. */
 static uint8_t *sp_write_n_buf;
 static uint32_t sp_write_n_bytes = 0;
+static int sp_write_n_extd = 0;
 
 /* sp_streamed_* used for flow control checking */
 static int sp_streamed_transmit_ops = 0;
@@ -97,7 +98,9 @@ enum stream_operation_id {
 	OPID_POLL,
 	OPID_POLLD,
 	OPID_EXEC_OPBUF,
-	OPID_SPIOP
+	OPID_SPIOP,
+	OPID_EWSQ,
+	OPID_EWRITEN,
 };
 
 static const char* streamop_name[] = {
@@ -111,6 +114,8 @@ static const char* streamop_name[] = {
 	"Poll for chip ready w/ delay",
 	"Execute operation buffer",
 	"SPI operation",
+	"Ext'd write sequence",
+	"Ext'd write-n",
 	NULL /* Terminator in case we want to enumerate */
 };
 
@@ -124,12 +129,27 @@ static int sp_opbuf_usage = 0;
 	whether the command is supported before doing it */
 static int sp_check_avail_automatic = 0;
 
-const uint8_t sp_cmd_has_token[] = { /* NOTE: Remember to add elements here if commands added. */
+static const uint8_t sp_cmd_has_token[] = { /* NOTE: Remember to add elements here if commands added. */
 	0, 0, 0, 0, 0, 0, 0, 0, /* 0x00 - 0x07 */
 	0, 1, 1, 1, 1, 1, 1, 1, /* 0x08 - 0x0F */
 	0, 0, 0, 1, 0, 0, 0, 1, /* 0x10 - 0x17 */
-	1, 0, 0, 0		/* 0x18, + padding for safety */
+	1, 1, 1, 0		/* 0x18 - 0x1B */
 };
+
+struct sp_extwrite_seq_info {
+	int mode;
+	int variable_data;
+	chipaddr variable_addr;
+	struct {
+		uint8_t len;
+		uint8_t buf[254];
+	} tx;
+};
+
+#define SP_EWSQ_INIT (struct sp_extwrite_seq_info){ .mode = 0, .variable_data = -1, .variable_addr = 0, .tx = { .len = 0 } }
+
+static struct sp_extwrite_seq_info sp_ewsq_current = SP_EWSQ_INIT;
+static struct sp_extwrite_seq_info sp_ewsq_new = SP_EWSQ_INIT;
 
 #if ! IS_WINDOWS
 static int sp_opensocket(char *ip, unsigned int port)
@@ -732,15 +752,10 @@ int serprog_init(void)
 			msg_perr("Error: Read n bytes not supported\n");
 			return 1;
 		}
-		if (sp_check_commandavail(S_CMD_O_WRITEB) == 0) {
-			msg_perr("Error: Write to opbuf: "
-				 "write byte not supported\n");
-			return 1;
-		}
 
 		if (sp_docommand(S_CMD_Q_WRNMAXLEN, 0, NULL, 3, rbuf)) {
-			msg_pdbg(MSGHEADER "Write-n not supported");
-			sp_max_write_n = 0;
+			msg_perr(MSGHEADER "Error: Write-n not supported");
+			return 1;
 		} else {
 			sp_max_write_n = ((unsigned int)(rbuf[0]) << 0);
 			sp_max_write_n |= ((unsigned int)(rbuf[1]) << 8);
@@ -837,12 +852,14 @@ static int sp_check_opbuf_usage(int bytes_to_be_added);
 static int sp_pass_writen(void)
 {
 	unsigned char header[8];
+	if  (!sp_write_n_bytes) return 0;
+
 	msg_pspew(MSGHEADER "Passing write-n bytes=%d addr=0x%x\n", sp_write_n_bytes, sp_write_n_addr);
 	if (sp_check_stream_free(8 + sp_write_n_bytes) != 0) {
 		return 1;
 	}
 	/* In case it's just a single byte send it as a single write. */
-	if (sp_write_n_bytes == 1) {
+	if ((!sp_write_n_extd)&&(sp_write_n_bytes == 1)&&(sp_check_commandavail(S_CMD_O_WRITEB))) {
 		sp_check_opbuf_usage(6);
 		sp_write_n_bytes = 0;
 		header[0] = (sp_write_n_addr >> 0) & 0xFF;
@@ -856,7 +873,7 @@ static int sp_pass_writen(void)
 		return 0;
 	}
 	sp_check_opbuf_usage(8 + sp_write_n_bytes);
-	header[0] = S_CMD_O_WRITEN;
+	header[0] = sp_write_n_extd ? S_CMD_O_EXTWRITEN : S_CMD_O_WRITEN;
 	header[1] = (sp_write_n_bytes >> 0) & 0xFF;
 	header[2] = (sp_write_n_bytes >> 8) & 0xFF;
 	header[3] = (sp_write_n_bytes >> 16) & 0xFF;
@@ -872,29 +889,30 @@ static int sp_pass_writen(void)
 		msg_perr(MSGHEADER "Error: cannot write write-n data");
 		return 1;
 	}
-	sp_streamop_put(OPID_WRITEN, 8 + sp_write_n_bytes);
+	sp_streamop_put(sp_write_n_extd ? OPID_EWRITEN : OPID_WRITEN, 8 + sp_write_n_bytes);
 	sp_opbuf_usage += 8 + sp_write_n_bytes;
 
 	sp_write_n_bytes = 0;
 	sp_prev_was_write = 0;
+	if (!sp_ewsq_new.mode) sp_write_n_extd = 0;
+
 	return 0;
 }
 
 static int sp_execute_opbuf_noflush(void)
 {
-	if ((sp_max_write_n) && (sp_write_n_bytes)) {
-		if (sp_pass_writen() != 0) {
-			msg_perr("Error: could not transfer write buffer\n");
-			return 1;
-		}
+	if (sp_pass_writen() != 0) {
+		msg_perr("Error: could not transfer write buffer\n");
+		return 1;
 	}
-	if (sp_check_commandavail(S_CMD_O_EXEC)) { /* Not mandatory for SPI only. */
+	if ((sp_opbuf_usage)&&(sp_check_commandavail(S_CMD_O_EXEC))) { /* Not mandatory for SPI only. */
 		if (sp_stream_buffer_op(S_CMD_O_EXEC, 0, NULL, OPID_EXEC_OPBUF) != 0) {
 			msg_perr("Error: could not execute command buffer\n");
 			return 1;
 		}
 		msg_pspew(MSGHEADER "Executed operation buffer of %d bytes\n", sp_opbuf_usage);
 	}
+	sp_ewsq_current = SP_EWSQ_INIT;
 	sp_opbuf_usage = 0;
 	sp_prev_was_write = 0;
 	return 0;
@@ -912,7 +930,7 @@ static int sp_execute_opbuf(void)
 
 static int serprog_shutdown(void *data)
 {
-	if ((sp_opbuf_usage) || (sp_max_write_n && sp_write_n_bytes))
+	if ((sp_opbuf_usage) || (sp_write_n_bytes))
 	if (sp_execute_opbuf() != 0)
 		msg_pwarn("Could not flush command buffer.\n");
 	if (sp_check_commandavail(S_CMD_S_PIN_STATE)) {
@@ -926,8 +944,8 @@ static int serprog_shutdown(void *data)
 	sp_streamed_ops_info = NULL;
 	/* FIXME: fix sockets on windows(?), especially closing */
 	serialport_shutdown(&sp_fd);
-	if (sp_max_write_n)
-		free(sp_write_n_buf);
+	free(sp_write_n_buf);
+	sp_write_n_buf = NULL;
 	return 0;
 }
 
@@ -946,33 +964,48 @@ static void serprog_chip_writeb(const struct flashctx *flash, uint8_t val,
 				chipaddr addr)
 {
 	msg_pspew("%s\n", __func__);
-	if (sp_max_write_n) {
-		if ((sp_prev_was_write)
-		    && (addr == (sp_write_n_addr + sp_write_n_bytes))) {
-			sp_write_n_buf[sp_write_n_bytes++] = val;
-		} else {
-			if ((sp_prev_was_write) && (sp_write_n_bytes))
-				sp_pass_writen();
-			sp_prev_was_write = 1;
-			sp_write_n_addr = addr;
-			sp_write_n_bytes = 1;
-			sp_write_n_buf[0] = val;
+	if (sp_ewsq_new.mode) {
+		if (sp_ewsq_new.mode & 1) {
+			if ((sp_ewsq_new.variable_data >=0) && (sp_ewsq_new.variable_data != val)) {
+				sp_ewsq_new.mode &= ~1;
+			} else {
+				sp_ewsq_new.variable_data = val;
+			}
 		}
-		sp_check_opbuf_usage(8 + sp_write_n_bytes);
-		if (sp_write_n_bytes >= sp_max_write_n)
-			sp_pass_writen();
-	} else {
-		/* We will have to do single writeb ops. */
-		unsigned char writeb_parm[5];
-		sp_check_opbuf_usage(6);
-		writeb_parm[0] = (addr >> 0) & 0xFF;
-		writeb_parm[1] = (addr >> 8) & 0xFF;
-		writeb_parm[2] = (addr >> 16) & 0xFF;
-		writeb_parm[3] = (addr >> 24) & 0xFF;
-		writeb_parm[4] = val;
-		sp_stream_buffer_op(S_CMD_O_WRITEB, 5, writeb_parm, OPID_WRITEB); // FIXME: return error
-		sp_opbuf_usage += 6;
+		if (sp_ewsq_new.mode & 2) {
+			if ((sp_ewsq_new.variable_addr) && (sp_ewsq_new.variable_addr != addr)) {
+				sp_ewsq_new.mode &= ~2;
+			} else {
+				sp_ewsq_new.variable_addr = addr;
+			}
+		}
+		int off = sp_ewsq_new.tx.len;
+		sp_ewsq_new.tx.buf[off++] = ((sp_ewsq_new.mode << 6) & 0xC0) | S_CMD_O_WRITEB;
+		if (!(sp_ewsq_new.mode & 2)) {
+			sp_ewsq_new.tx.buf[off++] = (addr >> 0) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (addr >> 8) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (addr >> 16) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (addr >> 24) & 0xFF;
+		}
+		if (!(sp_ewsq_new.mode & 1)) {
+			sp_ewsq_new.tx.buf[off++] = val;
+		}
+		sp_ewsq_new.tx.len = off;
+		return;
 	}
+	if ((sp_prev_was_write)
+	    && (addr == (sp_write_n_addr + sp_write_n_bytes))) {
+		sp_write_n_buf[sp_write_n_bytes++] = val;
+	} else {
+		sp_pass_writen();
+		sp_prev_was_write = 1;
+		sp_write_n_addr = addr;
+		sp_write_n_bytes = 1;
+		sp_write_n_buf[0] = val;
+	}
+	sp_check_opbuf_usage(8 + sp_write_n_bytes);
+	if (sp_write_n_bytes >= sp_max_write_n)
+		sp_pass_writen();
 }
 
 static uint8_t serprog_chip_readb(const struct flashctx *flash,
@@ -982,8 +1015,7 @@ static uint8_t serprog_chip_readb(const struct flashctx *flash,
 	unsigned char buf[4];
 	/* Will stream the read operation - eg. add it to the stream buffer, *
 	 * then flush the buffer, then read the read answer.		     */
-	if ((sp_opbuf_usage) || (sp_max_write_n && sp_write_n_bytes))
-		sp_execute_opbuf_noflush();
+	sp_execute_opbuf_noflush();
 	buf[0] = ((addr >> 0) & 0xFF);
 	buf[1] = ((addr >> 8) & 0xFF);
 	buf[2] = ((addr >> 16) & 0xFF);
@@ -1002,8 +1034,7 @@ static int sp_do_read_n(uint8_t * buf, const chipaddr addr, size_t len)
 	unsigned char sbuf[7];
 	msg_pspew("%s: addr=0x%" PRIxPTR " len=%zu\n", __func__, addr, len);
 	/* Stream the read-n -- as above. */
-	if ((sp_opbuf_usage) || (sp_max_write_n && sp_write_n_bytes))
-		sp_execute_opbuf_noflush();
+	sp_execute_opbuf_noflush();
 	sbuf[0] = ((addr >> 0) & 0xFF);
 	sbuf[1] = ((addr >> 8) & 0xFF);
 	sbuf[2] = ((addr >> 16) & 0xFF);
@@ -1050,19 +1081,52 @@ static void serprog_chip_poll(const struct flashctx *flash, const chipaddr addr,
 		}
 		lmask = lmask >> 1;
 	}
-
 	if ((sp_check_commandavail(delay ? S_CMD_O_POLL_DLY : S_CMD_O_POLL) == 0) || (shift < 0)) {
 		fallback_chip_poll(flash, addr, mask, data_or_toggle, delay);
 		return;
 	}
-
-	if ((sp_max_write_n) && (sp_write_n_bytes)) {
-		if (sp_pass_writen() != 0) {
-			msg_perr("Error: could not transfer write buffer\n");
-			return;
+	if (sp_ewsq_new.mode) {
+		if ((data_or_toggle > 0)&&(sp_ewsq_new.mode & 1)) {
+			if ((sp_ewsq_new.variable_data >=0) && (sp_ewsq_new.variable_data != data_or_toggle)) {
+				sp_ewsq_new.mode &= ~1;
+			} else {
+				sp_ewsq_new.variable_data = data_or_toggle;
+			}
 		}
+		if (sp_ewsq_new.mode & 2) {
+			if ((sp_ewsq_new.variable_addr) && (sp_ewsq_new.variable_addr != addr)) {
+				sp_ewsq_new.mode &= ~2;
+			} else {
+				sp_ewsq_new.variable_addr = addr;
+			}
+		}
+		int off = sp_ewsq_new.tx.len;
+		sp_ewsq_new.tx.buf[off++] = ((sp_ewsq_new.mode << 6) & 0xC0) | delay? S_CMD_O_POLL_DLY : S_CMD_O_POLL;
+		if (data_or_toggle > 0) data_or_toggle &= mask;
+		sp_ewsq_new.tx.buf[off++] = (data_or_toggle < 0 ? 0x10 : 0) | (data_or_toggle > 0 ? 0x20 : 0) | shift;
+
+		if (!(sp_ewsq_new.mode & 2)) {
+			sp_ewsq_new.tx.buf[off++] = (addr >> 0) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (addr >> 8) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (addr >> 16) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (addr >> 24) & 0xFF;
+		}
+		if (delay) {
+			sp_ewsq_new.tx.buf[off++] = (delay >> 0) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (delay >> 8) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (delay >> 16) & 0xFF;
+			sp_ewsq_new.tx.buf[off++] = (delay >> 24) & 0xFF;
+		}
+		sp_ewsq_new.tx.len = off;
+		return;
 	}
+
 	if (data_or_toggle > 0) data_or_toggle &= mask;
+
+	if (sp_pass_writen() != 0) {
+		msg_perr("Error: could not transfer write buffer\n");
+		return;
+	}
 
 	pbuf[0] = (data_or_toggle < 0 ? 0x10 : 0) | (data_or_toggle > 0 ? 0x20 : 0) | shift;
 	pbuf[1] = ((addr >> 0) & 0xFF);
@@ -1094,9 +1158,18 @@ void serprog_delay(unsigned int usecs)
 	unsigned char buf[4];
 	msg_pspew("%s usecs=%d\n", __func__, usecs);
 
-	if ((sp_max_write_n) && (sp_write_n_bytes))
-		sp_pass_writen();
+	if (sp_ewsq_new.mode) {
+		int off = sp_ewsq_new.tx.len;
+		sp_ewsq_new.tx.buf[off++] = S_CMD_O_DELAY;
+		sp_ewsq_new.tx.buf[off++] = (usecs >> 0) & 0xFF;
+		sp_ewsq_new.tx.buf[off++] = (usecs >> 8) & 0xFF;
+		sp_ewsq_new.tx.buf[off++] = (usecs >> 16) & 0xFF;
+		sp_ewsq_new.tx.buf[off++] = (usecs >> 24) & 0xFF;
+		sp_ewsq_new.tx.len = off;
+		return;
+	}
 
+	sp_pass_writen();
 	sp_prev_was_write = 0;
 
 	if (!sp_check_commandavail(S_CMD_O_DELAY)) {
@@ -1116,6 +1189,43 @@ void serprog_delay(unsigned int usecs)
 	sp_opbuf_usage += 5;
 }
 
+void serprog_hint(enum pgm_hint h)
+{
+	if ( (!sp_check_commandavail(S_CMD_O_EXTWRITE_SEQ)) ||
+		(!sp_check_commandavail(S_CMD_O_EXTWRITEN)) ) return;
+
+	switch (h) {
+		case PGMH_BW_CA_CD: sp_ewsq_new.mode = 0x10; break;
+		case PGMH_BW_CA_VD: sp_ewsq_new.mode = 0x11; break;
+		case PGMH_BW_VA_CD: sp_ewsq_new.mode = 0x12; break;
+		case PGMH_BW_VA_VD: sp_ewsq_new.mode = 0x13; break;
+		case PGMH_BW_LOOP_END:
+			if ((sp_opbuf_usage + sp_write_n_bytes + sp_ewsq_new.tx.len + 16) >= sp_device_opbuf_size) {
+				sp_execute_opbuf_noflush();
+				msg_pdbg2("%s: sent exec opbuf\n", __func__);
+			}
+			if ( (sp_ewsq_current.tx.len != sp_ewsq_new.tx.len) ||
+				(memcmp(&sp_ewsq_new.tx,&sp_ewsq_current.tx,sp_ewsq_new.tx.len)) ) {
+				sp_pass_writen();
+				sp_check_opbuf_usage(1+sp_ewsq_new.tx.len);
+				sp_stream_buffer_op(S_CMD_O_EXTWRITE_SEQ, sp_ewsq_new.tx.len+1, (void*)&sp_ewsq_new.tx, OPID_EWSQ);
+				sp_opbuf_usage += 1+sp_ewsq_new.tx.len;
+				sp_write_n_addr = sp_ewsq_new.variable_addr;
+				sp_write_n_extd = 1;
+				msg_pdbg2("%s: sent ewsq l=%d",__func__, sp_ewsq_new.tx.len);
+				print_hex_dbg2((void*)&sp_ewsq_new.tx, sp_ewsq_new.tx.len);
+			} else if (sp_ewsq_new.variable_addr != (sp_ewsq_current.variable_addr+1)) {
+				sp_pass_writen();
+				sp_write_n_addr = sp_ewsq_new.variable_addr;
+			}
+			sp_write_n_buf[sp_write_n_bytes++] = sp_ewsq_new.variable_data;
+			sp_ewsq_current = sp_ewsq_new;
+			sp_ewsq_new = SP_EWSQ_INIT;
+			break;
+	}
+
+}
+
 static int serprog_spi_send_command(struct flashctx *flash,
 				    unsigned int writecnt, unsigned int readcnt,
 				    const unsigned char *writearr,
@@ -1125,11 +1235,9 @@ static int serprog_spi_send_command(struct flashctx *flash,
 	int ret;
 	/* Stream the SPI op as much as possible. */
 	msg_pspew("%s, writecnt=%i, readcnt=%i\n", __func__, writecnt, readcnt);
-	if ((sp_opbuf_usage) || (sp_max_write_n && sp_write_n_bytes)) {
-		if (sp_execute_opbuf_noflush() != 0) {
-			msg_perr("Error: could not execute command buffer before sending SPI commands.\n");
-			return 1;
-		}
+	if (sp_execute_opbuf_noflush() != 0) {
+		msg_perr("Error: could not execute command buffer before sending SPI commands.\n");
+		return 1;
 	}
 
 

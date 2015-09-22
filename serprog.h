@@ -1,4 +1,4 @@
-/* According to Serial Flasher Protocol Specification - version 1 */
+/* According to Serial Flasher Protocol Specification - version 2 */
 #define S_ACK 0x06
 #define S_NAK 0x15
 #define S_CMD_NOP		0x00	/* No operation					*/
@@ -26,3 +26,5 @@
 #define S_CMD_Q_TOKEN		0x16	/* Return current token if token support.	*/
 #define S_CMD_O_POLL		0x17	/* Write to opbuf: poll				*/
 #define S_CMD_O_POLL_DLY	0x18	/* Write to opbuf: poll w/ delay		*/
+#define S_CMD_O_EXTWRITE_SEQ	0x19	/* Write to opbuf: set ext'd write-n sequence	*/
+#define S_CMD_O_EXTWRITEN	0x1A	/* Write to opbuf: ext'd write-n		*/

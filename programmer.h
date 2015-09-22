@@ -737,6 +737,7 @@ int register_master(const struct registered_master *mst);
 int serprog_init(void);
 void serprog_delay(unsigned int usecs);
 void *serprog_map(const char *descr, uintptr_t phys_addr, size_t len);
+void serprog_hint(enum pgm_hint h);
 #endif
 
 /* serial.c */

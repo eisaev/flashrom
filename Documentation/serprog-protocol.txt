@@ -43,6 +43,8 @@ COMMAND	Description			Parameters			Return Value
 0x16	Token NOP			none				ACK + TKN - existence used to indicate token support
 0x17	Write to opbuf: poll		8-bit flags + 32-bit addr	TKN / NAK
 0x18	Write to opbuf: poll w/ delay	as above + 32-bit usecs		TKN / NAK
+0x19	Write to opbuf: ext'd write seq 8-bit len + len of write seq	TKN / NAK
+0x1A	Write to opbuf: ext'd write-n	as write-n (0x0D)		TKN / NAK
 0x??	unimplemented command - invalid.
 
 0 is an invalid value for length of read n bytes or write n or return of query maximum write or read n length.
@@ -92,13 +94,13 @@ Additional information of the above commands:
 		to a supported frequency lower than the one requested. If there is
 		no lower frequency available the lowest possible should be used.
 		The value chosen is sent back in the reply with an ACK.
-	0x15 (S_CMD_S_PIN_STATE):
+	0x15 (S_PIN_STATE):
 		Sets the state of the pin drivers connected to the flash chip. Disabling them allows other
 		devices (e.g. a mainboard's chipset) to access the chip. This way the serprog controller can
 		remain attached to the flash chip even when the board is running. The user is responsible to
 		NOT connect VCC and other permanently externally driven signals to the programmer as needed.
 		If the value is 0, then the drivers should be disabled, otherwise they should be enabled.
-	0x17 and 0x18 (S_CMD_O_POLL and + _DLY):
+	0x17 and 0x18 (O_POLL and + _DLY):
 		flags: 0b00DT0BBB where T = toggle mode = 1 / data mode = 0, D = data bit in data mode,
 			B = bit to monitor (0-7). Unused bits (0) are not checked on device.
 		Implements algorithm to wait for flash chip to be ready before continuing opbuf
@@ -115,6 +117,17 @@ Additional information of the above commands:
 				tmp2 = flash_read(addr) & mask
 				if (tmp1 == tmp2) break
 				if (toggle mode) tmp1 = tmp2
+	0x19 (O_EXTWRITE_SEQ):
+		Stores a write sequence to be executed for each byte in a later ext'd write-n.
+		Write sequence format is based on the general serprog protocol with a subset
+		of commands: WRITEB, DELAY, POLL and POLL_DLY with slightly extended command bytes:
+		0bADCCCCCC where A is 1 if the addr is variable (from the write-n) and D
+		if the data is variable. C is the original command code (all fit in 6 bits).
+		Variable parameters (full bytes) are omitted from the sequence.
+	0x1A (O_EXTWRITEN):
+		This command requires that there is an extwrite seq command previously in
+		the opbuf and execution results in running through the latest extwrite sequence
+		with the variable addr and data substituted in from the extwriten parameters.
 
 	About mandatory commands:
 		The only truly mandatory commands for any device are 0x00, 0x01, 0x02 and 0x10,
