@@ -257,12 +257,19 @@ static int32_t usbTransferRW(const char *func, unsigned int writecnt, unsigned i
 				unsigned int read_que_now = min( CH341_PACKET_LENGTH -1, read_que_left );
 				in_done += transferred_ins[ip];
 				if (read_que_now) {
+					int er;
 					transferred_ins[ip] = 0;
 					transfer_ins[ip]->length = read_que_now;
 					transfer_ins[ip]->buffer = readarr;
-					libusb_submit_transfer(transfer_ins[ip]);
+					er = libusb_submit_transfer(transfer_ins[ip]);
 					read_que_left -= read_que_now;
 					readarr += read_que_now;
+					if (er) {
+						transferred_ins[ip] = -2;
+						ret = -1;
+						msg_perr("%s: failed to submit IN transfer: %s\n", func, libusb_error_name(er));
+						break;
+					}
 				} else {
 					/* Done with this slot. */
 					transferred_ins[ip] = -2;
