@@ -116,7 +116,7 @@
 #define	 CH341A_CMD_I2C_STM_OUT		0x80
 #define	 CH341A_CMD_I2C_STM_IN		0xC0
 #define	 CH341A_CMD_I2C_STM_MAX		( min( 0x3F, CH341_PACKET_LENGTH ) )
-#define	 CH341A_CMD_I2C_STM_SET		0x60 // bit 7 apparently SPI bit order, bit 2 spi single vs spi double
+#define	 CH341A_CMD_I2C_STM_SET		0x60 // bit 2 spi single vs spi double (5-wire mode, not useful for us AFAIK)
 #define	 CH341A_CMD_I2C_STM_US		0x40
 #define	 CH341A_CMD_I2C_STM_MS		0x50
 #define	 CH341A_CMD_I2C_STM_DLY		0x0F
