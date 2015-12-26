@@ -381,33 +381,55 @@ static int32_t ch341a_enable_pins(bool enable)
 }
 
 /* De-assert and assert CS in one operation. */
-static void ch341pluckCS(uint8_t *ptr)
+static void ch341pluckCS(uint8_t *ptr, int assert)
 {
-	int i;
 	/* This was measured to give 2.25 us deassertion time,
 	 * >20x more than needed (100ns) for most SPI chips. */
-	int delay_cnt = 2;
+	int delay_us = 1;
 	if (stored_delay_us) {
-		delay_cnt = (stored_delay_us * 4) / 3;
+		delay_us = stored_delay_us;
 		stored_delay_us = 0;
 	}
 	*ptr++ = CH341A_CMD_UIO_STREAM;
 	*ptr++ = CH341A_CMD_UIO_STM_OUT | 0x37; /* deasserted */
-	for (i=0;i<delay_cnt;i++)
-		*ptr++ = CH341A_CMD_UIO_STM_OUT | 0x37; /* "delay" */
-	*ptr++ = CH341A_CMD_UIO_STM_OUT | 0x36; /* asserted */
+	do {
+		int mcnt = min(0x3F, delay_us);
+		delay_us -= mcnt;
+		*ptr++ = CH341A_CMD_UIO_STM_US | mcnt;
+	} while (delay_us);
+	if (assert) *ptr++ = CH341A_CMD_UIO_STM_OUT | 0x36; /* asserted */
 	*ptr++ = CH341A_CMD_UIO_STM_END;
+}
+
+static void ch341_handle_big_delay(void)
+{
+	if (stored_delay_us > 1500) { /* Switch to ms mode (upto 1638us would work with the pluck CS function.) */
+		int packets = 2;
+		int delay_ms = stored_delay_us / 1000;
+		stored_delay_us = stored_delay_us % 1000;
+		uint8_t wbuf[2][CH341_PACKET_LENGTH];
+		memset(wbuf[0], 0, CH341_PACKET_LENGTH*2);
+		ch341pluckCS(wbuf[0], 0); /* Start with deasserting CS and doing the sub-ms part. */
+		do {
+			uint8_t *ptr = wbuf[1];
+			int mscnt = min(30*15, delay_ms);
+			delay_ms -= mscnt;
+			*ptr++ = CH341A_CMD_I2C_STREAM;
+			do {
+				int ms = min(15, mscnt);
+				mscnt -= ms;
+				*ptr++ = CH341A_CMD_I2C_STM_MS | ms;
+			} while (mscnt);
+			*ptr++ = CH341A_CMD_I2C_STM_END;
+			if (usbTransferRW(__func__, packets * CH341_PACKET_LENGTH, 0, wbuf[2 - packets], NULL) < 0)
+				return;
+			packets = 1; /* No CS manipulation in further transfers. */
+		} while (delay_ms);
+	}
 }
 
 void ch341a_delay(unsigned int usecs)
 {
-	/* Theres space for 28 bytes of 750ns/cycle "delay" in the CS packet, thus max 21us,
-	 * but lets not test the boundary, so lets say 20us. */
-	if ((usecs + stored_delay_us) > 20) {
-		unsigned int inc = 20 - stored_delay_us;
-		internal_delay(usecs - inc);
-		usecs = inc;
-	}
 	stored_delay_us += usecs;
 }
 
@@ -426,7 +448,8 @@ static int ch341a_spi_spi_send_command(struct flashctx *flash, unsigned int writ
 	uint8_t *ptr = wbuf[0];
 	/* CS usage is optimized by doing both transitions in one packet.
 	 * Final transition to deselected is in the pin disable. */
-	ch341pluckCS(ptr);
+	ch341_handle_big_delay(); /* This actually implements the >1.5ms delays, if needed. */
+	ch341pluckCS(ptr, 1);
 	unsigned int write_left = writecnt;
 	unsigned int read_left = readcnt;
 	int p;
