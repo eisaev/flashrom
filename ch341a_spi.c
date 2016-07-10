@@ -95,7 +95,7 @@ const struct dev_entry devs_ch341a_spi[] = {
 
 enum trans_state {TRANS_ACTIVE = -2, TRANS_ERR = -1, TRANS_IDLE = 0};
 
-static void print_hex(const void *buf, size_t len)
+static void print_hex_l(const void *buf, size_t len)
 {
 	size_t i;
 	for (i = 0; i < len; i++) {
@@ -212,12 +212,12 @@ static int32_t usb_transfer(const char *func, unsigned int writecnt, unsigned in
 
 	if (out_done > 0) {
 		msg_pspew("Wrote %d bytes:\n", out_done);
-		print_hex(writearr, out_done);
+		print_hex_l(writearr, out_done);
 		msg_pspew("\n\n");
 	}
 	if (in_done > 0) {
 		msg_pspew("Read %d bytes:\n", in_done);
-		print_hex(readarr, in_done);
+		print_hex_l(readarr, in_done);
 		msg_pspew("\n\n");
 	}
 	return 0;
