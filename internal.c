@@ -131,6 +131,8 @@ int register_superio(struct superio s)
 int is_laptop = 0;
 int laptop_ok = 0;
 
+/* This matches with the #if for the registration of par_master_internal */
+#if IS_X86 || IS_MIPS
 static void internal_chip_writeb(const struct flashctx *flash, uint8_t val,
 				 chipaddr addr);
 static void internal_chip_writew(const struct flashctx *flash, uint16_t val,
@@ -155,6 +157,7 @@ static const struct par_master par_master_internal = {
 		.chip_writel		= internal_chip_writel,
 		.chip_writen		= fallback_chip_writen,
 };
+#endif
 
 enum chipbustype internal_buses_supported = BUS_NONE;
 
@@ -358,6 +361,8 @@ int internal_init(void)
 }
 #endif
 
+/* This matches with the #if for the registration of par_master_internal */
+#if IS_X86 || IS_MIPS
 static void internal_chip_writeb(const struct flashctx *flash, uint8_t val,
 				 chipaddr addr)
 {
@@ -400,3 +405,4 @@ static void internal_chip_readn(const struct flashctx *flash, uint8_t *buf,
 	mmio_readn((void *)addr, buf, len);
 	return;
 }
+#endif
