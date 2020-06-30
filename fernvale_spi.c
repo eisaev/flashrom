@@ -25,18 +25,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <errno.h>
-#include <termios.h>
 
 #include "flash.h"
 #include "programmer.h"
 #include "spi.h"
 
 #define DEFAULT_DEV "/dev/fernvale"
-#define BAUDRATE B921600
-
-static struct {
-	int fd;
-} fernvale_data;
 
 static int fernvale_spi_send_command(struct flashctx *flash,
 				    unsigned int writecnt, unsigned int readcnt,
@@ -56,39 +50,30 @@ static const struct spi_master spi_master_fernvale = {
 
 static int fernvale_spi_shutdown(void *data)
 {
-	const char cmd[] = { 0, 0 };
+	int ret = 0, ret2 = 0;
+	const unsigned char cmd[] = { 0, 0 };
 
-	write(fernvale_data.fd, cmd, sizeof(cmd));
+	ret = serialport_write(cmd, sizeof(cmd));
+	ret2 = serialport_shutdown(NULL);
+	if (ret2 && !ret)
+		ret = ret2;
 
-	return 0;
+	return ret;
 }
 
-static int fernvale_spi_setserial(int serfd)
+static int fernvale_serialport_setup(char *dev)
 {
-	int ret;
-	struct termios t;
-
-	ret = tcgetattr(serfd, &t);
-	if (-1 == ret) {
-		perror("Failed to get attributes");
-		exit(1);
-	}
-	cfsetispeed(&t, BAUDRATE);
-	cfsetospeed(&t, BAUDRATE);
-	cfmakeraw(&t);
-	ret = tcsetattr(serfd, TCSANOW, &t);
-	if (-1 == ret) {
-		perror("Failed to set attributes");
-		exit(1);
-	}
-
+	/* 115200bps, 8 databits, no parity, 1 stopbit */
+	sp_fd = sp_openserport(dev, 921600);
+	if (sp_fd == SER_INV_FD)
+		return 1;
 	return 0;
 }
 
 int fernvale_spi_init(void)
 {
-	struct spi_master mst = spi_master_fernvale;
 	char *dev;
+	int ret = 0;
 
 	dev = extract_programmer_param("dev");
 	if (dev && !strlen(dev)) {
@@ -98,41 +83,37 @@ int fernvale_spi_init(void)
 	if (!dev)
 		dev = DEFAULT_DEV;
 
-	fernvale_data.fd = open(dev, O_RDWR);
-	if (fernvale_data.fd == -1) {
-		msg_perr("Unable to open serial device. "
-			"Use flashrom -p fernvale_spi:dev=/dev/ttyUSB0\n");
-		return 1;
+	ret = fernvale_serialport_setup(dev);
+	free(dev);
+	if (ret) {
+		return ret;
 	}
 
-	fernvale_spi_setserial(fernvale_data.fd);
-
-	const char cmd[] = "spi flashrom\n";
-	char readback;
+	const unsigned char cmd[] = "spi flashrom\n";
+	unsigned char readback;
 	int ready_tries = 0;
-	write(fernvale_data.fd, cmd, strlen(cmd));
+	serialport_write(cmd, 12);
 
 	/* Look for "Ready" signal */
 	do {
-		read(fernvale_data.fd, &readback, sizeof(readback));
+		serialport_read(&readback, sizeof(readback));
 		ready_tries++;
 	} while (readback != 0x05);
 	msg_gdbg("Found 'ready' signal after %d bytes\n", ready_tries);
 
-	mst.data = &fernvale_data;
-	register_spi_master(&mst);
+	register_spi_master(&spi_master_fernvale);
 	register_shutdown(fernvale_spi_shutdown, NULL);
 
 	return 0;
 }
 
-static int write_full(int fd, const void *bfr, int size)
+static int write_full(const void *bfr, int size)
 {
 	int ret;
 	int left = size;
 
 	while (left > 0) {
-		ret = write(fd, bfr, left);
+		ret = serialport_write(bfr, left);
 		if (ret == -1) {
 			if (errno == EAGAIN)
 				continue;
@@ -149,14 +130,14 @@ static int write_full(int fd, const void *bfr, int size)
 	return size;
 }
 
-static int read_full(int fd, void *bfr, int size)
+static int read_full(void *bfr, int size)
 {
 	int ret;
 	int left = size;
 
 	msg_gdbg(" Reading %d bytes:", size);
 	while (left > 0) {
-		ret = read(fd, bfr, 1);
+		ret = serialport_read(bfr, 1);
 		if (ret == -1) {
 			if (errno == EAGAIN)
 				continue;
@@ -182,20 +163,19 @@ static int fernvale_spi_send_command(struct flashctx *flash,
 	uint8_t out_bytes = writecnt;
 	uint8_t in_bytes = readcnt;
 	int ret;
-	int fd = fernvale_data.fd;
 	int i;
 #if 1
-	ret = write_full(fd, &out_bytes, sizeof(out_bytes));
+	ret = write_full(&out_bytes, sizeof(out_bytes));
 	if (ret != sizeof(out_bytes))
 		msg_perr("0: Wanted to write %d bytes, but got %d\n",
 				(int)sizeof(out_bytes), ret);
 
-	ret = write_full(fd, &in_bytes, sizeof(in_bytes));
+	ret = write_full(&in_bytes, sizeof(in_bytes));
 	if (ret != sizeof(in_bytes))
 		msg_perr("1: Wanted to write %d bytes, but got %d\n",
 				(int)sizeof(in_bytes), ret);
 
-	ret = write_full(fd, writearr, out_bytes);
+	ret = write_full(writearr, out_bytes);
 	if (ret != out_bytes)
 		msg_perr("0: Wanted to write %d bytes, but got %d\n",
 				out_bytes, ret);
@@ -211,7 +191,7 @@ static int fernvale_spi_send_command(struct flashctx *flash,
 	bfr[1] = in_bytes;
 	memcpy(&bfr[2], writearr, out_bytes);
 
-	ret = write_full(fd, bfr, sizeof(bfr));
+	ret = write_full(bfr, sizeof(bfr));
 	if (ret != sizeof(bfr))
 		msg_perr("0: Wanted to write %d bytes, but got %d\n",
 				sizeof(bfr), ret);
@@ -222,7 +202,7 @@ static int fernvale_spi_send_command(struct flashctx *flash,
 	msg_gdbg("  ");
 #endif
 
-	ret = read_full(fd, readarr, in_bytes);
+	ret = read_full(readarr, in_bytes);
 	if (ret != in_bytes)
 		msg_perr("3: Wanted to read %d bytes, but got %d\n",
 				in_bytes, ret);
